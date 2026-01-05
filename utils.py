@@ -44,44 +44,77 @@ def procesar_csv(df: pd.DataFrame, lat_ref: float, lon_ref: float, radio_km: flo
     
     return df_filtrado
 
-def identificar_zonas_peligrosas(accidentes: List[Tuple[float, float]], radio_metros: float = 500) -> List[Dict]:
+def identificar_zonas_peligrosas(puntos, radio_metros=300, min_accidentes=2):
     """
-    Identifica zonas con alta concentración de accidentes
+    Identifica zonas peligrosas usando clustering DBSCAN
+    
+    Args:
+        puntos: Lista de tuplas (latitud, longitud)
+        radio_metros: Radio en metros para considerar puntos cercanos (reducido a 300m)
+        min_accidentes: Mínimo de accidentes para considerar una zona peligrosa (reducido a 2)
+    
+    Returns:
+        Lista de diccionarios con información de zonas peligrosas
     """
-    if not accidentes:
+    if len(puntos) < min_accidentes:
         return []
     
-    zonas = []
-    procesados = set()
+    # Convertir a array numpy
+    coords = np.array(puntos)
     
-    for i, (lat1, lon1) in enumerate(accidentes):
-        if i in procesados:
+    # DBSCAN espera distancia en grados aproximadamente
+    # 1 grado ≈ 111km, entonces radio_metros/111000 nos da grados
+    epsilon = radio_metros / 111000
+    
+    # Aplicar DBSCAN
+    clustering = DBSCAN(eps=epsilon, min_samples=min_accidentes, metric='euclidean')
+    labels = clustering.fit_predict(coords)
+    
+    zonas_peligrosas = []
+    
+    # Procesar cada cluster encontrado
+    for cluster_id in set(labels):
+        if cluster_id == -1:  # Ignorar ruido
             continue
-            
-        # Contar accidentes cercanos
-        cluster = []
-        for j, (lat2, lon2) in enumerate(accidentes):
-            distancia = calcular_distancia_haversine(lat1, lon1, lat2, lon2) * 1000  # a metros
-            if distancia <= radio_metros:
-                cluster.append(j)
-                procesados.add(j)
         
-        if len(cluster) >= 3:  # Zona peligrosa si hay 3+ accidentes
-            # Calcular centroide
-            lats = [accidentes[j][0] for j in cluster]
-            lons = [accidentes[j][1] for j in cluster]
-            
-            nivel = "ALTO" if len(cluster) >= 10 else "MEDIO" if len(cluster) >= 5 else "BAJO"
-            
-            zonas.append({
-                "latitud": np.mean(lats),
-                "longitud": np.mean(lons),
-                "cantidad_accidentes": len(cluster),
-                "radio_metros": radio_metros,
+        # Obtener puntos del cluster
+        mask = labels == cluster_id
+        cluster_coords = coords[mask]
+        
+        # Calcular centro del cluster (centroide)
+        centro_lat = float(np.mean(cluster_coords[:, 0]))
+        centro_lng = float(np.mean(cluster_coords[:, 1]))
+        
+        cantidad = int(np.sum(mask))
+        
+        # Determinar nivel de peligro según cantidad de accidentes
+        if cantidad >= 5:  # Reducido de 10 a 5
+            nivel = "ALTO"
+            radio_zona = 400  # Radio más grande para zonas de alto riesgo
+        elif cantidad >= 3:  # Reducido de 5 a 3
+            nivel = "MEDIO"
+            radio_zona = 300
+        else:
+            nivel = "BAJO"
+            radio_zona = 200
+        
+        # Retornar zonas de nivel ALTO y MEDIO
+        if nivel in ["ALTO", "MEDIO"]:
+            zonas_peligrosas.append({
+                "latitud": centro_lat,
+                "longitud": centro_lng,
+                "cantidad_accidentes": cantidad,
+                "radio_metros": radio_zona,
                 "nivel_peligro": nivel
             })
     
-    return sorted(zonas, key=lambda x: x['cantidad_accidentes'], reverse=True)
+    # Ordenar por cantidad de accidentes (más peligrosas primero)
+    zonas_peligrosas.sort(key=lambda x: x['cantidad_accidentes'], reverse=True)
+    
+    print(f"🎯 Zonas detectadas: ALTO={len([z for z in zonas_peligrosas if z['nivel_peligro']=='ALTO'])}, MEDIO={len([z for z in zonas_peligrosas if z['nivel_peligro']=='MEDIO'])}")
+    
+    return zonas_peligrosas
+
 
 def generar_recomendaciones(estadisticas: Dict, zonas_peligrosas: List[Dict]) -> List[str]:
     """
@@ -217,3 +250,71 @@ def combinar_datos(df_csv: pd.DataFrame, datos_api: List[Dict], lat_ref: float, 
         "zonas_peligrosas": zonas,
         "recomendaciones": recomendaciones
     }
+from sklearn.cluster import DBSCAN
+import numpy as np
+
+def identificar_zonas_peligrosas(puntos, radio_metros=500, min_accidentes=3):
+    """
+    Identifica zonas peligrosas usando clustering DBSCAN
+    
+    Args:
+        puntos: Lista de tuplas (latitud, longitud)
+        radio_metros: Radio en metros para considerar puntos cercanos
+        min_accidentes: Mínimo de accidentes para considerar una zona peligrosa
+    
+    Returns:
+        Lista de diccionarios con información de zonas peligrosas
+    """
+    if len(puntos) < min_accidentes:
+        return []
+    
+    # Convertir a array numpy
+    coords = np.array(puntos)
+    
+    # DBSCAN espera distancia en grados aproximadamente
+    # 1 grado ≈ 111km, entonces radio_metros/111000 nos da grados
+    epsilon = radio_metros / 111000
+    
+    # Aplicar DBSCAN
+    clustering = DBSCAN(eps=epsilon, min_samples=min_accidentes, metric='euclidean')
+    labels = clustering.fit_predict(coords)
+    
+    zonas_peligrosas = []
+    
+    # Procesar cada cluster encontrado
+    for cluster_id in set(labels):
+        if cluster_id == -1:  # Ignorar ruido
+            continue
+        
+        # Obtener puntos del cluster
+        mask = labels == cluster_id
+        cluster_coords = coords[mask]
+        
+        # Calcular centro del cluster (centroide)
+        centro_lat = float(np.mean(cluster_coords[:, 0]))
+        centro_lng = float(np.mean(cluster_coords[:, 1]))
+        
+        cantidad = int(np.sum(mask))
+        
+        # Determinar nivel de peligro según cantidad de accidentes
+        if cantidad >= 10:
+            nivel = "ALTO"
+        elif cantidad >= 5:
+            nivel = "MEDIO"
+        else:
+            nivel = "BAJO"
+        
+        # Solo retornar zonas de nivel ALTO o MEDIO
+        if nivel in ["ALTO", "MEDIO"]:
+            zonas_peligrosas.append({
+                "latitud": centro_lat,
+                "longitud": centro_lng,
+                "cantidad_accidentes": cantidad,
+                "radio_metros": radio_metros,
+                "nivel_peligro": nivel
+            })
+    
+    # Ordenar por cantidad de accidentes (más peligrosas primero)
+    zonas_peligrosas.sort(key=lambda x: x['cantidad_accidentes'], reverse=True)
+    
+    return zonas_peligrosas
